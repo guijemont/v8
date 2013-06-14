@@ -550,6 +550,7 @@ Parser::Parser(CompilationInfo* info)
       allow_lazy_(false),
       allow_generators_(false),
       allow_for_of_(false),
+      allow_generator_comprehension_(false),
       stack_overflow_(false),
       parenthesized_function_(false),
       zone_(info->zone()),
@@ -562,6 +563,7 @@ Parser::Parser(CompilationInfo* info)
   set_allow_lazy(false);  // Must be explicitly enabled.
   set_allow_generators(FLAG_harmony_generators);
   set_allow_for_of(FLAG_harmony_iteration);
+  set_allow_generator_comprehension(FLAG_harmony_generator_comprehension);
 }
 
 
@@ -3536,6 +3538,7 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
   //   ObjectLiteral
   //   RegExpLiteral
   //   '(' Expression ')'
+  //   GeneratorComprehension
 
   Expression* result = NULL;
   switch (peek()) {
@@ -3612,10 +3615,45 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
 
     case Token::LPAREN:
       Consume(Token::LPAREN);
-      // Heuristically try to detect immediately called functions before
-      // seeing the call parentheses.
-      parenthesized_function_ = (peek() == Token::FUNCTION);
-      result = ParseExpression(true, CHECK_OK);
+      if (allow_generator_comprehension() && peek() == Token::FOR) {
+        // generator comprehension
+        Consume(Token::FOR);
+        Expect(Token::LPAREN, CHECK_OK);
+        Handle<String> identifier = ParseIdentifier(CHECK_OK);
+        VariableProxy* each =
+            top_scope_->NewUnresolved(factory(), identifier,
+                                      Interface::NewValue());
+        Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
+        Expect(Token::RPAREN, CHECK_OK);
+        Expression* body = ParseAssignmentExpression(true, CHECK_OK);
+        Handle<String> no_name = factory()->empty_string();
+        ForEachStatement *loop =
+            factory()->NewForEachStatement(ForEachStatement::ITERATE,
+                                           labels /* what? */);
+        // FIXME: fill that loop
+        ZoneList<Statement*>* body =
+            new(zone()) ZoneList<Statement*>(1, zone());
+        body->Add(for_statement);
+        FunctionLiteral* function_literal =
+            factory()->NewFunctionLiteral(no_name,
+                                          top_scope_, // probably not what we want
+                                          body,
+                                          0, // materialzed literal count (?)
+                                          0, // expected property count (?)
+                                          0, // handler count (?)
+                                          0, // function has zero parameters
+                                          FunctionLiteral::kNoDuplicateParameters,
+                                          FunctionLiteral::ANONYMOUS_EXPRESSION, // yeah?
+                                          FunctionLiteral::kIsFunction, // I guess
+                                          FunctionLiteral::kIsParenthesized, // what does that mean?
+                                          FunctionLiteral::kIsGenerator);
+        // result = factory->NewCall(??)
+      } else {
+        // Heuristically try to detect immediately called functions before
+        // seeing the call parentheses.
+        parenthesized_function_ = (peek() == Token::FUNCTION);
+        result = ParseExpression(true, CHECK_OK);
+      }
       Expect(Token::RPAREN, CHECK_OK);
       break;
 

@@ -438,6 +438,9 @@ class Parser BASE_EMBEDDED {
   bool allow_harmony_scoping() { return scanner().HarmonyScoping(); }
   bool allow_generators() const { return allow_generators_; }
   bool allow_for_of() const { return allow_for_of_; }
+  bool allow_generator_comprehension const {
+    return allow_generator_comprehension_;
+  }
 
   void set_allow_natives_syntax(bool allow) { allow_natives_syntax_ = allow; }
   void set_allow_lazy(bool allow) { allow_lazy_ = allow; }
@@ -447,6 +450,9 @@ class Parser BASE_EMBEDDED {
   }
   void set_allow_generators(bool allow) { allow_generators_ = allow; }
   void set_allow_for_of(bool allow) { allow_for_of_ = allow; }
+  void set_allow_generator_comprehension(bool allow) {
+    allow_generator_comprehension_ = allow;
+  }
 
   // Parses the source code represented by the compilation info and sets its
   // function literal.  Returns false (and deallocates any allocated AST
@@ -862,6 +868,7 @@ class Parser BASE_EMBEDDED {
   bool allow_lazy_;
   bool allow_generators_;
   bool allow_for_of_;
+  bool allow_generator_comprehension_;
   bool stack_overflow_;
   // If true, the next (and immediately following) function literal is
   // preceded by a parenthesis.
