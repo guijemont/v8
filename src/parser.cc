@@ -560,6 +560,7 @@ Parser::Parser(CompilationInfo* info)
   set_allow_lazy(false);  // Must be explicitly enabled.
   set_allow_generators(FLAG_harmony_generators);
   set_allow_for_of(FLAG_harmony_iteration);
+  set_allow_generator_comprehensions(FLAG_harmony_generator_comprehensions);
   set_allow_harmony_numeric_literals(FLAG_harmony_numeric_literals);
 }
 
@@ -3519,6 +3520,103 @@ void Parser::ReportInvalidPreparseData(Handle<String> name, bool* ok) {
 }
 
 
+Expression* Parser::ParseGeneratorComprehension(bool* ok) {
+  // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
+  // around it). Something like "for (x of z) y"
+
+  Scope* scope = NewScope(top_scope_, FUNCTION_SCOPE);
+
+  FunctionState function_state(this, scope, isolate());
+  // TODO(guijemont): the code below is ugly cut and paste
+  // For generators, allocating variables in contexts is currently a win
+  // because it minimizes the work needed to suspend and resume an
+  // activation.
+  top_scope_->ForceContextAllocation();
+
+  // Calling a generator returns a generator object.  That object is stored
+  // in a temporary variable, a definition that is used by "yield"
+  // expressions.  Presence of a variable for the generator object in the
+  // FunctionState indicates that this function is a generator.
+  Handle<String> tempname = isolate()->factory()->InternalizeOneByteString(
+      STATIC_ASCII_VECTOR(".generator_object"));
+  Variable* temp = top_scope_->DeclarationScope()->NewTemporary(tempname);
+  function_state.set_generator_object_variable(temp);
+
+  scope->set_start_position(scanner().location().beg_pos);
+
+  int pos = peek_position();
+
+  // Parse "for (x of z)"
+  Consume(Token::FOR);
+  Expect(Token::LPAREN, CHECK_OK);
+  Handle<String> identifier = ParseIdentifier(CHECK_OK);
+  // TODO(guijemont): we might need to do some transformation if identifier is
+  // "yield". Check that in unit tests.
+  ExpectContextualKeyword(CStrVector("of"), CHECK_OK);
+  Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
+  Expect(Token::RPAREN, CHECK_OK);
+
+  // Parse "y"
+  // TODO(guijemont): Handle nested for-of and if.
+  Expression* for_body_expression = ParseAssignmentExpression(true, CHECK_OK);
+
+  // AST Node generation. For now, we basically rewrite a Generator
+  // Comprehension that looks like this:
+  //
+  //   (for (x of z) y)
+  //
+  // into that:
+  //
+  //  (function* () { for (x of z) yield y; }())
+
+  // Generate nodes for the "for" loop
+  VariableProxy* each =
+      scope->NewUnresolved(factory(), identifier, Interface::NewValue());
+  Yield* yield = factory()->NewYield(
+      factory()->NewVariableProxy(temp),
+      for_body_expression,
+      Yield::SUSPEND, RelocInfo::kNoPosition);
+  Statement* for_body = factory()->NewExpressionStatement(yield, pos);
+  Handle<String> no_name = isolate()->factory()->empty_string();
+  ForEachStatement* loop =
+    factory()->NewForEachStatement(ForEachStatement::ITERATE, NULL, pos);
+  InitializeForEachStatement(loop, each, subject, for_body);
+
+  // Generate nodes for the function
+  ZoneList<Statement*>* function_body =
+      new(zone()) ZoneList<Statement*>(3, zone());
+  function_body->Add(factory()->NewExpressionStatement(NewInitialYield(pos),
+              pos), zone());
+  function_body->Add(loop, zone());
+  function_body->Add(factory()->NewExpressionStatement(NewFinalYield(), pos),
+                     zone());
+  FunctionLiteral* function_literal =
+      factory()->NewFunctionLiteral(no_name,
+                                    scope,
+                                    function_body,
+                                    function_state.materialized_literal_count(),
+                                    function_state.expected_property_count(),
+                                    function_state.handler_count(),
+                                    0,  // function has zero parameters
+                                    FunctionLiteral::kNoDuplicateParameters,
+                                    FunctionLiteral::ANONYMOUS_EXPRESSION,
+                                    FunctionLiteral::kIsFunction,
+                                    FunctionLiteral::kIsParenthesized,
+                                    FunctionLiteral::kIsGenerator,
+                                    pos);
+
+  // our top node, which is the immediate call
+  ZoneList<Expression*>* arguments =
+      new(zone()) ZoneList<Expression*>(0, zone());
+  Expression* result = factory()->NewCall(function_literal, arguments,
+                                          RelocInfo::kNoPosition);
+
+  scope->set_end_position(scanner().location().end_pos);
+
+  return result;
+}
+
+
 Expression* Parser::ParsePrimaryExpression(bool* ok) {
   // PrimaryExpression ::
   //   'this'
@@ -3532,6 +3630,7 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
   //   ObjectLiteral
   //   RegExpLiteral
   //   '(' Expression ')'
+  //   GeneratorComprehension
 
   int pos = peek_position();
   Expression* result = NULL;
@@ -3612,7 +3711,12 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
       // Heuristically try to detect immediately called functions before
       // seeing the call parentheses.
       parenthesized_function_ = (peek() == Token::FUNCTION);
-      result = ParseExpression(true, CHECK_OK);
+
+      if (allow_generator_comprehensions() && peek() == Token::FOR) {
+        result = ParseGeneratorComprehension(CHECK_OK);
+      } else {
+        result = ParseExpression(true, CHECK_OK);
+      }
       Expect(Token::RPAREN, CHECK_OK);
       break;
 
@@ -4255,20 +4359,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
 
       // For generators, allocate and yield an iterator on function entry.
       if (is_generator) {
-        ZoneList<Expression*>* arguments =
-            new(zone()) ZoneList<Expression*>(0, zone());
-        CallRuntime* allocation = factory()->NewCallRuntime(
-            isolate()->factory()->empty_string(),
-            Runtime::FunctionForId(Runtime::kCreateJSGeneratorObject),
-            arguments, pos);
-        VariableProxy* init_proxy = factory()->NewVariableProxy(
-            current_function_state_->generator_object_variable());
-        Assignment* assignment = factory()->NewAssignment(
-            Token::INIT_VAR, init_proxy, allocation, RelocInfo::kNoPosition);
-        VariableProxy* get_proxy = factory()->NewVariableProxy(
-            current_function_state_->generator_object_variable());
-        Yield* yield = factory()->NewYield(
-            get_proxy, assignment, Yield::INITIAL, RelocInfo::kNoPosition);
+        Yield* yield = NewInitialYield(pos);
         body->Add(factory()->NewExpressionStatement(
             yield, RelocInfo::kNoPosition), zone());
       }
@@ -4276,12 +4367,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
       ParseSourceElements(body, Token::RBRACE, false, false, CHECK_OK);
 
       if (is_generator) {
-        VariableProxy* get_proxy = factory()->NewVariableProxy(
-            current_function_state_->generator_object_variable());
-        Expression *undefined = factory()->NewLiteral(
-            isolate()->factory()->undefined_value(), RelocInfo::kNoPosition);
-        Yield* yield = factory()->NewYield(
-            get_proxy, undefined, Yield::FINAL, RelocInfo::kNoPosition);
+        Yield* yield = NewFinalYield();
         body->Add(factory()->NewExpressionStatement(
             yield, RelocInfo::kNoPosition), zone());
       }
@@ -4691,6 +4777,35 @@ Expression* Parser::NewThrowReferenceError(Handle<String> message) {
                        message, HandleVector<Object>(NULL, 0));
 }
 
+
+Yield* Parser::NewInitialYield(int pos) {
+  ASSERT(is_generator());
+  ZoneList<Expression*>* arguments =
+      new(zone()) ZoneList<Expression*>(0, zone());
+  CallRuntime* allocation = factory()->NewCallRuntime(
+          isolate()->factory()->empty_string(),
+          Runtime::FunctionForId(Runtime::kCreateJSGeneratorObject), arguments,
+          pos);
+  VariableProxy* init_proxy = factory()->NewVariableProxy(
+          current_function_state_->generator_object_variable());
+  Assignment* assignment = factory()->NewAssignment(Token::INIT_VAR,
+          init_proxy, allocation, RelocInfo::kNoPosition);
+  VariableProxy* get_proxy = factory()->NewVariableProxy(
+          current_function_state_->generator_object_variable());
+  return factory()->NewYield(get_proxy, assignment, Yield::INITIAL,
+          RelocInfo::kNoPosition);
+}
+
+
+Yield* Parser::NewFinalYield() {
+  ASSERT(is_generator());
+  VariableProxy* get_proxy = factory()->NewVariableProxy(
+          current_function_state_->generator_object_variable());
+  Expression *undefined = factory()->NewLiteral(
+          isolate()->factory()->undefined_value(), RelocInfo::kNoPosition);
+  return factory()->NewYield(get_proxy, undefined, Yield::FINAL,
+          RelocInfo::kNoPosition);
+}
 
 Expression* Parser::NewThrowSyntaxError(Handle<String> message,
                                         Handle<Object> first) {

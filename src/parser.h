@@ -636,6 +636,7 @@ class Parser : public ParserBase {
   Expression* ParseMemberWithNewPrefixesExpression(PositionStack* stack,
                                                    bool* ok);
   Expression* ParsePrimaryExpression(bool* ok);
+  Expression* ParseGeneratorComprehension(bool *ok);
   Expression* ParseArrayLiteral(bool* ok);
   Expression* ParseObjectLiteral(bool* ok);
   Expression* ParseRegExpLiteral(bool seen_equal, bool* ok);
@@ -755,6 +756,9 @@ class Parser : public ParserBase {
   Expression* NewThrowError(Handle<String> constructor,
                             Handle<String> type,
                             Vector< Handle<Object> > arguments);
+
+  Yield* NewInitialYield(int pos);
+  Yield* NewFinalYield();
 
   PreParser::PreParseResult LazyParseFunctionLiteral(
        SingletonLogger* logger);
