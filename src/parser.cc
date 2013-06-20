@@ -550,7 +550,7 @@ Parser::Parser(CompilationInfo* info)
       allow_lazy_(false),
       allow_generators_(false),
       allow_for_of_(false),
-      allow_generator_comprehension_(false),
+      allow_generator_comprehensions_(false),
       stack_overflow_(false),
       parenthesized_function_(false),
       zone_(info->zone()),
@@ -563,7 +563,7 @@ Parser::Parser(CompilationInfo* info)
   set_allow_lazy(false);  // Must be explicitly enabled.
   set_allow_generators(FLAG_harmony_generators);
   set_allow_for_of(FLAG_harmony_iteration);
-  set_allow_generator_comprehension(FLAG_harmony_generator_comprehension);
+  set_allow_generator_comprehensions(FLAG_harmony_generator_comprehensions);
 }
 
 
@@ -3524,6 +3524,91 @@ void Parser::ReportInvalidPreparseData(Handle<String> name, bool* ok) {
   *ok = false;
 }
 
+Expression* Parser::ParseGeneratorComprehension(bool* ok) {
+  // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
+  // around it). Something like "for (x of z) y"
+
+  Scope* saved_scope = top_scope_;
+  Scope* our_scope = NewScope(top_scope_, BLOCK_SCOPE);
+  top_scope_ = our_scope;
+  our_scope->set_start_position(scanner().location().beg_pos);
+
+  FunctionState function_state(this, our_scope, isolate());
+
+  // Calling a generator returns a generator object.  That object is stored
+  // in a temporary variable, a definition that is used by "yield"
+  // expressions.  Presence of a variable for the generator object in the
+  // FunctionState indicates that this function is a generator.
+  Handle<String> tempname = isolate()->factory()->InternalizeOneByteString(
+      STATIC_ASCII_VECTOR(".generator_object"));
+  Variable* temp = top_scope_->DeclarationScope()->NewTemporary(tempname);
+  function_state.set_generator_object_variable(temp);
+
+  // Parse "for (x of z)"
+  Consume(Token::FOR);
+  Expect(Token::LPAREN, CHECK_OK);
+  Handle<String> identifier = ParseIdentifier(CHECK_OK);
+  Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
+  Expect(Token::RPAREN, CHECK_OK);
+
+  // Parse "y"
+  Expression* for_body_expression = ParseAssignmentExpression(true, CHECK_OK);
+
+  // AST Node generation. For now, we basically rewrite a Generator
+  // Comprehension that looks like this:
+  //
+  //   (for (x of z) y)
+  //
+  // into that:
+  //
+  //  (function* () { for (x of y) yield z; }())
+
+  // Generate nodes for the "for" loop
+  VariableProxy* each =
+    our_scope->NewUnresolved(factory(), identifier, Interface::NewValue());
+  Yield* yield = factory()->NewYield(
+          factory()->NewVariableProxy(temp),
+          for_body_expression,
+          Yield::SUSPEND, RelocInfo::kNoPosition);
+  Statement* for_body = factory()->NewExpressionStatement(yield);
+  Handle<String> no_name = isolate()->factory()->empty_string();
+  ForEachStatement* loop =
+    factory()->NewForEachStatement(ForEachStatement::ITERATE, NULL);
+  InitializeForEachStatement(loop, each, subject, for_body);
+
+  // Generate nodes for the function
+  ZoneList<Statement*>* function_body =
+      new(zone()) ZoneList<Statement*>(3, zone());
+  function_body->Add(factory()->NewExpressionStatement(NewInitialYield()),
+                     zone());
+  function_body->Add(loop, zone());
+  function_body->Add(factory()->NewExpressionStatement(NewFinalYield()),
+                     zone());
+  FunctionLiteral* function_literal =
+      factory()->NewFunctionLiteral(no_name,
+                                    our_scope,
+                                    function_body,
+                                    function_state.materialized_literal_count(),
+                                    function_state.expected_property_count(),
+                                    function_state.handler_count(),
+                                    0, // function has zero parameters
+                                    FunctionLiteral::kNoDuplicateParameters,
+                                    FunctionLiteral::ANONYMOUS_EXPRESSION,
+                                    FunctionLiteral::kIsFunction,
+                                    FunctionLiteral::kIsParenthesized,
+                                    FunctionLiteral::kIsGenerator);
+
+  // our top node, which is the immediate call
+  ZoneList<Expression*>* arguments =
+      new(zone()) ZoneList<Expression*>(0, zone());
+  Expression* result = factory()->NewCall(function_literal, arguments,
+                                          RelocInfo::kNoPosition);
+
+  our_scope->set_end_position(scanner().location().end_pos);
+  top_scope_ = saved_scope;
+
+  return result;
+}
 
 Expression* Parser::ParsePrimaryExpression(bool* ok) {
   // PrimaryExpression ::
@@ -3615,39 +3700,8 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
 
     case Token::LPAREN:
       Consume(Token::LPAREN);
-      if (allow_generator_comprehension() && peek() == Token::FOR) {
-        // generator comprehension
-        Consume(Token::FOR);
-        Expect(Token::LPAREN, CHECK_OK);
-        Handle<String> identifier = ParseIdentifier(CHECK_OK);
-        VariableProxy* each =
-            top_scope_->NewUnresolved(factory(), identifier,
-                                      Interface::NewValue());
-        Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
-        Expect(Token::RPAREN, CHECK_OK);
-        Expression* body = ParseAssignmentExpression(true, CHECK_OK);
-        Handle<String> no_name = factory()->empty_string();
-        ForEachStatement *loop =
-            factory()->NewForEachStatement(ForEachStatement::ITERATE,
-                                           labels /* what? */);
-        // FIXME: fill that loop
-        ZoneList<Statement*>* body =
-            new(zone()) ZoneList<Statement*>(1, zone());
-        body->Add(for_statement);
-        FunctionLiteral* function_literal =
-            factory()->NewFunctionLiteral(no_name,
-                                          top_scope_, // probably not what we want
-                                          body,
-                                          0, // materialzed literal count (?)
-                                          0, // expected property count (?)
-                                          0, // handler count (?)
-                                          0, // function has zero parameters
-                                          FunctionLiteral::kNoDuplicateParameters,
-                                          FunctionLiteral::ANONYMOUS_EXPRESSION, // yeah?
-                                          FunctionLiteral::kIsFunction, // I guess
-                                          FunctionLiteral::kIsParenthesized, // what does that mean?
-                                          FunctionLiteral::kIsGenerator);
-        // result = factory->NewCall(??)
+      if (allow_generator_comprehensions() && peek() == Token::FOR) {
+        result = ParseGeneratorComprehension(CHECK_OK);
       } else {
         // Heuristically try to detect immediately called functions before
         // seeing the call parentheses.
@@ -4511,32 +4565,14 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
 
       // For generators, allocate and yield an iterator on function entry.
       if (is_generator) {
-        ZoneList<Expression*>* arguments =
-            new(zone()) ZoneList<Expression*>(0, zone());
-        CallRuntime* allocation = factory()->NewCallRuntime(
-            isolate()->factory()->empty_string(),
-            Runtime::FunctionForId(Runtime::kCreateJSGeneratorObject),
-            arguments);
-        VariableProxy* init_proxy = factory()->NewVariableProxy(
-            current_function_state_->generator_object_variable());
-        Assignment* assignment = factory()->NewAssignment(
-            Token::INIT_VAR, init_proxy, allocation, RelocInfo::kNoPosition);
-        VariableProxy* get_proxy = factory()->NewVariableProxy(
-            current_function_state_->generator_object_variable());
-        Yield* yield = factory()->NewYield(
-            get_proxy, assignment, Yield::INITIAL, RelocInfo::kNoPosition);
+        Yield* yield = NewInitialYield();
         body->Add(factory()->NewExpressionStatement(yield), zone());
       }
 
       ParseSourceElements(body, Token::RBRACE, false, false, CHECK_OK);
 
       if (is_generator) {
-        VariableProxy* get_proxy = factory()->NewVariableProxy(
-            current_function_state_->generator_object_variable());
-        Expression *undefined = factory()->NewLiteral(
-            isolate()->factory()->undefined_value());
-        Yield* yield = factory()->NewYield(
-            get_proxy, undefined, Yield::FINAL, RelocInfo::kNoPosition);
+        Yield* yield = NewFinalYield();
         body->Add(factory()->NewExpressionStatement(yield), zone());
       }
 
@@ -4970,6 +5006,31 @@ Expression* Parser::NewThrowReferenceError(Handle<String> message) {
                        message, HandleVector<Object>(NULL, 0));
 }
 
+Yield* Parser::NewInitialYield() {
+  ZoneList<Expression*>* arguments =
+      new(zone()) ZoneList<Expression*>(0, zone());
+  CallRuntime* allocation = factory()->NewCallRuntime(
+      isolate()->factory()->empty_string(),
+      Runtime::FunctionForId(Runtime::kCreateJSGeneratorObject),
+      arguments);
+  VariableProxy* init_proxy = factory()->NewVariableProxy(
+      current_function_state_->generator_object_variable());
+  Assignment* assignment = factory()->NewAssignment(
+      Token::INIT_VAR, init_proxy, allocation, RelocInfo::kNoPosition);
+  VariableProxy* get_proxy = factory()->NewVariableProxy(
+      current_function_state_->generator_object_variable());
+  return factory()->NewYield(get_proxy, assignment, Yield::INITIAL,
+                             RelocInfo::kNoPosition);
+}
+
+Yield* Parser::NewFinalYield() {
+  VariableProxy* get_proxy = factory()->NewVariableProxy(
+      current_function_state_->generator_object_variable());
+  Expression *undefined = factory()->NewLiteral(
+      isolate()->factory()->undefined_value());
+  return factory()->NewYield(get_proxy, undefined, Yield::FINAL,
+                             RelocInfo::kNoPosition);
+}
 
 Expression* Parser::NewThrowSyntaxError(Handle<String> message,
                                         Handle<Object> first) {

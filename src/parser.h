@@ -438,8 +438,8 @@ class Parser BASE_EMBEDDED {
   bool allow_harmony_scoping() { return scanner().HarmonyScoping(); }
   bool allow_generators() const { return allow_generators_; }
   bool allow_for_of() const { return allow_for_of_; }
-  bool allow_generator_comprehension const {
-    return allow_generator_comprehension_;
+  bool allow_generator_comprehensions() const {
+    return allow_generator_comprehensions_;
   }
 
   void set_allow_natives_syntax(bool allow) { allow_natives_syntax_ = allow; }
@@ -450,8 +450,8 @@ class Parser BASE_EMBEDDED {
   }
   void set_allow_generators(bool allow) { allow_generators_ = allow; }
   void set_allow_for_of(bool allow) { allow_for_of_ = allow; }
-  void set_allow_generator_comprehension(bool allow) {
-    allow_generator_comprehension_ = allow;
+  void set_allow_generator_comprehensions(bool allow) {
+    allow_generator_comprehensions_ = allow;
   }
 
   // Parses the source code represented by the compilation info and sets its
@@ -670,6 +670,7 @@ class Parser BASE_EMBEDDED {
   Expression* ParseMemberWithNewPrefixesExpression(PositionStack* stack,
                                                    bool* ok);
   Expression* ParsePrimaryExpression(bool* ok);
+  Expression* ParseGeneratorComprehension(bool *ok);
   Expression* ParseArrayLiteral(bool* ok);
   Expression* ParseObjectLiteral(bool* ok);
   ObjectLiteral::Property* ParseObjectLiteralGetSet(bool is_getter, bool* ok);
@@ -843,6 +844,9 @@ class Parser BASE_EMBEDDED {
                             Handle<String> type,
                             Vector< Handle<Object> > arguments);
 
+  Yield* NewInitialYield();
+  Yield* NewFinalYield();
+
   preparser::PreParser::PreParseResult LazyParseFunctionLiteral(
        SingletonLogger* logger);
 
@@ -868,7 +872,7 @@ class Parser BASE_EMBEDDED {
   bool allow_lazy_;
   bool allow_generators_;
   bool allow_for_of_;
-  bool allow_generator_comprehension_;
+  bool allow_generator_comprehensions_;
   bool stack_overflow_;
   // If true, the next (and immediately following) function literal is
   // preceded by a parenthesis.
