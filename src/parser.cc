@@ -3528,12 +3528,14 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
   // around it). Something like "for (x of z) y"
 
-  Scope* saved_scope = top_scope_;
-  Scope* our_scope = NewScope(top_scope_, BLOCK_SCOPE);
-  top_scope_ = our_scope;
-  our_scope->set_start_position(scanner().location().beg_pos);
+  Scope* scope = NewScope(top_scope_, FUNCTION_SCOPE);
 
-  FunctionState function_state(this, our_scope, isolate());
+  FunctionState function_state(this, scope, isolate());
+  // TODO(guijemont): the code below is ugly cut and paste
+  // For generators, allocating variables in contexts is currently a win
+  // because it minimizes the work needed to suspend and resume an
+  // activation.
+  top_scope_->ForceContextAllocation();
 
   // Calling a generator returns a generator object.  That object is stored
   // in a temporary variable, a definition that is used by "yield"
@@ -3544,14 +3546,20 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   Variable* temp = top_scope_->DeclarationScope()->NewTemporary(tempname);
   function_state.set_generator_object_variable(temp);
 
+  scope->set_start_position(scanner().location().beg_pos);
+
   // Parse "for (x of z)"
   Consume(Token::FOR);
   Expect(Token::LPAREN, CHECK_OK);
   Handle<String> identifier = ParseIdentifier(CHECK_OK);
+  // TODO(guijemont): we might need to do some transformation if identifier is
+  // "yield". Check that in unit tests.
+  ExpectContextualKeyword(CStrVector("of"), CHECK_OK);
   Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
   Expect(Token::RPAREN, CHECK_OK);
 
   // Parse "y"
+  // TODO(guijemont): Handle nested for-of and if.
   Expression* for_body_expression = ParseAssignmentExpression(true, CHECK_OK);
 
   // AST Node generation. For now, we basically rewrite a Generator
@@ -3561,15 +3569,15 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   //
   // into that:
   //
-  //  (function* () { for (x of y) yield z; }())
+  //  (function* () { for (x of z) yield y; }())
 
   // Generate nodes for the "for" loop
   VariableProxy* each =
-    our_scope->NewUnresolved(factory(), identifier, Interface::NewValue());
+      scope->NewUnresolved(factory(), identifier, Interface::NewValue());
   Yield* yield = factory()->NewYield(
-          factory()->NewVariableProxy(temp),
-          for_body_expression,
-          Yield::SUSPEND, RelocInfo::kNoPosition);
+      factory()->NewVariableProxy(temp),
+      for_body_expression,
+      Yield::SUSPEND, RelocInfo::kNoPosition);
   Statement* for_body = factory()->NewExpressionStatement(yield);
   Handle<String> no_name = isolate()->factory()->empty_string();
   ForEachStatement* loop =
@@ -3586,7 +3594,7 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
                      zone());
   FunctionLiteral* function_literal =
       factory()->NewFunctionLiteral(no_name,
-                                    our_scope,
+                                    scope,
                                     function_body,
                                     function_state.materialized_literal_count(),
                                     function_state.expected_property_count(),
@@ -3604,8 +3612,7 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   Expression* result = factory()->NewCall(function_literal, arguments,
                                           RelocInfo::kNoPosition);
 
-  our_scope->set_end_position(scanner().location().end_pos);
-  top_scope_ = saved_scope;
+  scope->set_end_position(scanner().location().end_pos);
 
   return result;
 }
@@ -3700,12 +3707,13 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
 
     case Token::LPAREN:
       Consume(Token::LPAREN);
+      // Heuristically try to detect immediately called functions before
+      // seeing the call parentheses.
+      parenthesized_function_ = (peek() == Token::FUNCTION);
+
       if (allow_generator_comprehensions() && peek() == Token::FOR) {
         result = ParseGeneratorComprehension(CHECK_OK);
       } else {
-        // Heuristically try to detect immediately called functions before
-        // seeing the call parentheses.
-        parenthesized_function_ = (peek() == Token::FUNCTION);
         result = ParseExpression(true, CHECK_OK);
       }
       Expect(Token::RPAREN, CHECK_OK);
@@ -5006,7 +5014,9 @@ Expression* Parser::NewThrowReferenceError(Handle<String> message) {
                        message, HandleVector<Object>(NULL, 0));
 }
 
+
 Yield* Parser::NewInitialYield() {
+  ASSERT(is_generator());
   ZoneList<Expression*>* arguments =
       new(zone()) ZoneList<Expression*>(0, zone());
   CallRuntime* allocation = factory()->NewCallRuntime(
@@ -5023,7 +5033,9 @@ Yield* Parser::NewInitialYield() {
                              RelocInfo::kNoPosition);
 }
 
+
 Yield* Parser::NewFinalYield() {
+  ASSERT(is_generator());
   VariableProxy* get_proxy = factory()->NewVariableProxy(
       current_function_state_->generator_object_variable());
   Expression *undefined = factory()->NewLiteral(
