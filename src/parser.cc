@@ -3519,6 +3519,16 @@ void Parser::ReportInvalidPreparseData(Handle<String> name, bool* ok) {
   *ok = false;
 }
 
+class ForOfInformation {
+public:
+        inline ForOfInformation(Handle<String> identifier_, Expression *subject_):
+            identifier(identifier_),
+            subject(subject_) { }
+        // FIXME: figure out if/how we need to clean these explicitly
+
+        Handle<String> identifier;
+        Expression *subject;
+};
 
 Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
@@ -3546,18 +3556,22 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
 
   int pos = peek_position();
 
-  // Parse "for (x of z)"
+  // Parse all the "for (x of z)"
+  // TODO(guijemont): store pointers to ForOfInformation?
+  List<ForOfInformation> for_ofs;
   Consume(Token::FOR);
-  Expect(Token::LPAREN, CHECK_OK);
-  Handle<String> identifier = ParseIdentifier(CHECK_OK);
-  // TODO(guijemont): we might need to do some transformation if identifier is
-  // "yield". Check that in unit tests.
-  ExpectContextualKeyword(CStrVector("of"), CHECK_OK);
-  Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
-  Expect(Token::RPAREN, CHECK_OK);
+  do {
+      Expect(Token::LPAREN, CHECK_OK);
+      Handle<String> identifier = ParseIdentifier(CHECK_OK);
+      // TODO(guijemont): we might need to do some transformation if identifier is
+      // "yield". Check that in unit tests.
+      ExpectContextualKeyword(CStrVector("of"), CHECK_OK);
+      Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
+      Expect(Token::RPAREN, CHECK_OK);
+      for_ofs.Add(ForOfInformation(identifier, subject));
+  } while (Check(Token::FOR));
 
   // Parse "y"
-  // TODO(guijemont): Handle nested for-of and if.
   Expression* for_body_expression = ParseAssignmentExpression(true, CHECK_OK);
 
   // AST Node generation. For now, we basically rewrite a Generator
@@ -3569,27 +3583,35 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   //
   //  (function* () { for (x of z) yield y; }())
 
-  // Generate nodes for the "for" loop
-  VariableProxy* each =
-      scope->NewUnresolved(factory(), identifier, Interface::NewValue());
+  // Generate nodes for the "for" loops
+  // TODO(guijemont): keep track of the position of the various parts
+
   Yield* yield = factory()->NewYield(
       factory()->NewVariableProxy(temp),
       for_body_expression,
       Yield::SUSPEND, RelocInfo::kNoPosition);
-  Statement* for_body = factory()->NewExpressionStatement(yield, pos);
-  Handle<String> no_name = isolate()->factory()->empty_string();
-  ForEachStatement* loop =
-    factory()->NewForEachStatement(ForEachStatement::ITERATE, NULL, pos);
-  InitializeForEachStatement(loop, each, subject, for_body);
+  Statement* body = factory()->NewExpressionStatement(yield, pos);
+
+  // TODO(guijemont): check if there is a faster way of going through for_ofs.
+  for (int i = for_ofs.length() - 1; i >= 0; i--) {
+      ForOfInformation for_of = for_ofs[i];
+      VariableProxy* each =
+          scope->NewUnresolved(factory(), for_of.identifier, Interface::NewValue());
+      ForEachStatement* loop =
+          factory()->NewForEachStatement(ForEachStatement::ITERATE, NULL, pos);
+      InitializeForEachStatement(loop, each, for_of.subject, body);
+      body = loop;
+  }
 
   // Generate nodes for the function
   ZoneList<Statement*>* function_body =
       new(zone()) ZoneList<Statement*>(3, zone());
   function_body->Add(factory()->NewExpressionStatement(NewInitialYield(pos),
               pos), zone());
-  function_body->Add(loop, zone());
+  function_body->Add(body, zone());
   function_body->Add(factory()->NewExpressionStatement(NewFinalYield(), pos),
                      zone());
+  Handle<String> no_name = isolate()->factory()->empty_string();
   FunctionLiteral* function_literal =
       factory()->NewFunctionLiteral(no_name,
                                     scope,
