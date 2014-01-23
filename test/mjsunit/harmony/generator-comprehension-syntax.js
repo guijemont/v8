@@ -31,3 +31,7 @@
 
 
 (for (x of y) z);
+
+(for (x of a) for (y of b) z);
+
+(for (x of y) if (x > 1) x)
