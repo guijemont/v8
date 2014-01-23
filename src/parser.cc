@@ -3548,13 +3548,19 @@ Statement* Parser::ParseComprehension(Scope *scope,
             result = loop;
             break;
         }
-        case Token::IF:
-            // TODO(guijemont): implement this
+        case Token::IF: {
             Consume(Token::IF);
-            *ok = false;
-            result = NULL;
-            ReportUnexpectedToken(Token::IF);
+            Expect(Token::LPAREN, CHECK_OK);
+            Expression* condition = ParseAssignmentExpression(true, CHECK_OK);
+            Expect(Token::RPAREN, CHECK_OK);
+            Statement* then_statement =
+                ParseComprehension(scope, yield_variable, CHECK_OK);
+            Statement* else_statement =
+                factory()->NewEmptyStatement(RelocInfo::kNoPosition);
+            result = factory()->NewIfStatement(condition, then_statement,
+                    else_statement, pos);
             break;
+        }
         default:
             // AssignmentExpression
             Expression *inner_body = ParseAssignmentExpression(true, CHECK_OK);
