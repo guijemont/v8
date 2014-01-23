@@ -3526,13 +3526,13 @@ Statement* Parser::ParseComprehension(Scope *scope,
     Token::Value next = peek();
     int pos = peek_position();
     Statement *result;
-    switch(next) {
+    switch (next) {
         case Token::FOR: {
             Consume(Token::FOR);
             Expect(Token::LPAREN, CHECK_OK);
             Handle<String> identifier = ParseIdentifier(CHECK_OK);
-            // TODO(guijemont): we might need to do some transformation if identifier is
-            // "yield". Check that in unit tests.
+            // TODO(guijemont): we might need to do some transformation if
+            // identifier is "yield". Check that in unit tests.
             ExpectContextualKeyword(CStrVector("of"), CHECK_OK);
             Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
             Expect(Token::RPAREN, CHECK_OK);
@@ -3572,6 +3572,7 @@ Statement* Parser::ParseComprehension(Scope *scope,
     }
     return result;
 }
+
 
 Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
