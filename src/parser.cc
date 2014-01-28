@@ -3578,6 +3578,7 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
   // around it). Something like "for (x of z) y"
 
+  // TODO(guijemont): should we create a new scope for each "for"?
   Scope* scope = NewScope(top_scope_, FUNCTION_SCOPE);
 
   FunctionState function_state(this, scope, isolate());
