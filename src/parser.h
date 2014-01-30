@@ -637,9 +637,7 @@ class Parser : public ParserBase {
                                                    bool* ok);
   Expression* ParsePrimaryExpression(bool* ok);
   Expression* ParseGeneratorComprehension(bool *ok);
-  Statement* ParseComprehension(Scope *scope,
-                                Variable *yield_variable,
-                                bool *ok);
+  Statement* ParseComprehension(Variable *yield_variable, bool *ok);
   Expression* ParseArrayLiteral(bool* ok);
   Expression* ParseObjectLiteral(bool* ok);
   Expression* ParseRegExpLiteral(bool seen_equal, bool* ok);

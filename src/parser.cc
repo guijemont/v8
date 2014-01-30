@@ -3520,31 +3520,108 @@ void Parser::ReportInvalidPreparseData(Handle<String> name, bool* ok) {
 }
 
 
-Statement* Parser::ParseComprehension(Scope *scope,
-                                      Variable *yield_variable,
+Statement* Parser::ParseComprehension(Variable *yield_variable,
                                       bool *ok) {
     Token::Value next = peek();
     int pos = peek_position();
     Statement *result;
     switch (next) {
         case Token::FOR: {
+            // A for-of is rewritten like a non-comprehension for-of is
+            // rewritten when its loop variable is let-defined. That is, inside
+            // the comprehension we rewrite:
+            //
+            //   for (x of e) b
+            //
+            // into
+            //
+            //   <let x' be a temporary variable>
+            //   for (x' in e) {
+            //     let x;
+            //     x = x';
+            //     b;
+            //   }
+
+            // TODO(guijemont): this code has a _lot_ in common with
+            // ParseForStatement(), and also a bit with
+            // ParseVariableDeclaration
+            Scope* saved_scope = top_scope_;
             Consume(Token::FOR);
             Expect(Token::LPAREN, CHECK_OK);
-            Handle<String> identifier = ParseIdentifier(CHECK_OK);
-            // TODO(guijemont): we might need to do some transformation if
-            // identifier is "yield". Check that in unit tests.
+            Scope* for_scope = NewScope(top_scope_, BLOCK_SCOPE);
+            for_scope->set_start_position(scanner().location().beg_pos);
+            top_scope_ = for_scope;
+
+            // Construct the init block for the loop variable
+            Handle<String> name;
+            Block* variable_statement = factory()->NewBlock(NULL, 1, true, pos);
+            {
+                name = ParseIdentifier(CHECK_OK);
+                // TODO(guijemont): we might need to do some transformation if
+                // name is "yield". Check that in unit tests.
+                VariableProxy* proxy =
+                    NewUnresolved(name, LET, Interface::NewValue());
+                Declaration* declaration =
+                    factory()->NewVariableDeclaration(proxy, LET, for_scope,
+                        pos);
+                Declare(declaration, true, CHECK_OK);
+                // Record the end position of the initializer.
+                if (proxy->var() != NULL) {
+                    proxy->var()->set_initializer_position(position());
+                }
+                Expression* value = GetLiteralUndefined(position());
+                Assignment* assignment =
+                    factory()->NewAssignment(Token::INIT_LET, proxy, value,
+                        pos);
+                variable_statement->AddStatement(
+                        factory()->NewExpressionStatement(assignment,
+                            RelocInfo::kNoPosition),
+                        zone());
+            }
+
+            top_scope_ = saved_scope;
+
             ExpectContextualKeyword(CStrVector("of"), CHECK_OK);
             Expression* subject = ParseAssignmentExpression(true, CHECK_OK);
             Expect(Token::RPAREN, CHECK_OK);
 
+            top_scope_ = for_scope;
+
+            // TODO(keuchel): Move the temporary variable to the block scope,
+            // after implementing stack allocated block scoped variables.
+            Factory* heap_factory = isolate()->factory();
+            Handle<String> tempstr =
+                heap_factory->NewConsString(heap_factory->dot_for_string(),
+                    name);
+            Handle<String> tempname = heap_factory->InternalizeString(tempstr);
+            Variable* temp =
+                top_scope_->DeclarationScope()->NewTemporary(tempname);
+            VariableProxy* temp_proxy = factory()->NewVariableProxy(temp);
+
             Statement *body =
-                ParseComprehension(scope, yield_variable, CHECK_OK);
-            VariableProxy* each = scope->NewUnresolved(factory(), identifier,
+                ParseComprehension(yield_variable, CHECK_OK);
+            VariableProxy* each = top_scope_->NewUnresolved(factory(), name,
                     Interface::NewValue());
             ForEachStatement *loop =
                 factory()->NewForEachStatement(ForEachStatement::ITERATE, NULL,
                         pos);
-            InitializeForEachStatement(loop, each, subject, body);
+
+            Block* body_block =
+                factory()->NewBlock(NULL, 3, false, RelocInfo::kNoPosition);
+            Assignment* assignment = factory()->NewAssignment(
+                    Token::ASSIGN, each, temp_proxy, RelocInfo::kNoPosition);
+            Statement* assignment_statement = factory()->NewExpressionStatement(
+                    assignment, RelocInfo::kNoPosition);
+            body_block->AddStatement(variable_statement, zone());
+            body_block->AddStatement(assignment_statement, zone());
+            body_block->AddStatement(body, zone());
+
+
+            InitializeForEachStatement(loop, temp_proxy, subject, body_block);
+            top_scope_ = saved_scope;
+            for_scope->set_end_position(scanner().location().end_pos);
+            for_scope = for_scope->FinalizeBlockScope();
+            body_block->set_scope(for_scope);
             result = loop;
             break;
         }
@@ -3554,7 +3631,7 @@ Statement* Parser::ParseComprehension(Scope *scope,
             Expression* condition = ParseAssignmentExpression(true, CHECK_OK);
             Expect(Token::RPAREN, CHECK_OK);
             Statement* then_statement =
-                ParseComprehension(scope, yield_variable, CHECK_OK);
+                ParseComprehension(yield_variable, CHECK_OK);
             Statement* else_statement =
                 factory()->NewEmptyStatement(RelocInfo::kNoPosition);
             result = factory()->NewIfStatement(condition, then_statement,
@@ -3578,7 +3655,6 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
   // around it). Something like "for (x of z) y"
 
-  // TODO(guijemont): should we create a new scope for each "for"?
   Scope* scope = NewScope(top_scope_, FUNCTION_SCOPE);
 
   FunctionState function_state(this, scope, isolate());
@@ -3601,7 +3677,7 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
 
   int pos = peek_position();
 
-  Statement *body = ParseComprehension(scope, temp, CHECK_OK);
+  Statement *body = ParseComprehension(temp, CHECK_OK);
 
   // Generate nodes for the function
   ZoneList<Statement*>* function_body =
