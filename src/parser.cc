@@ -3566,6 +3566,7 @@ Statement* Parser::ParseComprehension(Variable *yield_variable,
                         pos);
                 Declare(declaration, true, CHECK_OK);
                 // Record the end position of the initializer.
+                // TODO(guijemont): do we need that?
                 if (proxy->var() != NULL) {
                     proxy->var()->set_initializer_position(position());
                 }
@@ -3655,46 +3656,55 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   // Parses the _inside_ of a GeneratorComprehension, (not the parentheses
   // around it). Something like "for (x of z) y"
 
+  int materialized_literal_count;
+  int expected_property_count;
+  int handler_count;
+  int pos;
   Scope* scope = NewScope(top_scope_, FUNCTION_SCOPE);
+  ZoneList<Statement*>* function_body;
 
-  FunctionState function_state(this, scope, isolate());
-  // TODO(guijemont): the code below is ugly cut and paste
-  // For generators, allocating variables in contexts is currently a win
-  // because it minimizes the work needed to suspend and resume an
-  // activation.
-  top_scope_->ForceContextAllocation();
+  {
+      FunctionState function_state(this, scope, isolate());
+      // TODO(guijemont): the code below is ugly cut and paste
+      // For generators, allocating variables in contexts is currently a win
+      // because it minimizes the work needed to suspend and resume an
+      // activation.
+      top_scope_->ForceContextAllocation();
 
-  // Calling a generator returns a generator object.  That object is stored
-  // in a temporary variable, a definition that is used by "yield"
-  // expressions.  Presence of a variable for the generator object in the
-  // FunctionState indicates that this function is a generator.
-  Handle<String> tempname = isolate()->factory()->InternalizeOneByteString(
-      STATIC_ASCII_VECTOR(".generator_object"));
-  Variable* temp = top_scope_->DeclarationScope()->NewTemporary(tempname);
-  function_state.set_generator_object_variable(temp);
+      // Calling a generator returns a generator object.  That object is stored
+      // in a temporary variable, a definition that is used by "yield"
+      // expressions.  Presence of a variable for the generator object in the
+      // FunctionState indicates that this function is a generator.
+      Handle<String> tempname = isolate()->factory()->InternalizeOneByteString(
+              STATIC_ASCII_VECTOR(".generator_object"));
+      Variable* temp = top_scope_->DeclarationScope()->NewTemporary(tempname);
+      function_state.set_generator_object_variable(temp);
 
-  scope->set_start_position(scanner().location().beg_pos);
+      scope->set_start_position(scanner().location().beg_pos);
 
-  int pos = peek_position();
+      pos = peek_position();
 
-  Statement *body = ParseComprehension(temp, CHECK_OK);
+      Statement *body = ParseComprehension(temp, CHECK_OK);
 
-  // Generate nodes for the function
-  ZoneList<Statement*>* function_body =
-      new(zone()) ZoneList<Statement*>(3, zone());
-  function_body->Add(factory()->NewExpressionStatement(NewInitialYield(pos),
-              pos), zone());
-  function_body->Add(body, zone());
-  function_body->Add(factory()->NewExpressionStatement(NewFinalYield(), pos),
-                     zone());
+      // Generate nodes for the function
+      function_body = new(zone()) ZoneList<Statement*>(3, zone());
+      function_body->Add(factory()->NewExpressionStatement(NewInitialYield(pos),
+                  pos), zone());
+      function_body->Add(body, zone());
+      function_body->Add(factory()->NewExpressionStatement(NewFinalYield(),
+                  pos), zone());
+      materialized_literal_count = function_state.materialized_literal_count();
+      expected_property_count = function_state.expected_property_count();
+      handler_count = function_state.handler_count();
+  }
   Handle<String> no_name = isolate()->factory()->empty_string();
   FunctionLiteral* function_literal =
       factory()->NewFunctionLiteral(no_name,
                                     scope,
                                     function_body,
-                                    function_state.materialized_literal_count(),
-                                    function_state.expected_property_count(),
-                                    function_state.handler_count(),
+                                    materialized_literal_count,
+                                    expected_property_count,
+                                    handler_count,
                                     0,  // function has zero parameters
                                     FunctionLiteral::kNoDuplicateParameters,
                                     FunctionLiteral::ANONYMOUS_EXPRESSION,
