@@ -104,3 +104,21 @@ function* i() { yield 42; }
     var gen = (for (x of h()) if (x % 2 !== 0) x);
     assertEquals([1,3], array_of_gen(gen));
 })();
+
+// Check that "this" has the same value inside the generator as outside of it
+var global = this;
+var goofy_context = { 'goofy_context': true };
+(function (){
+    assertEquals(this, goofy_context);
+    var gen = (for (x of i()) this);
+    assertEquals({ 'value': goofy_context, 'done': false}, gen.next());
+    assertEquals({ 'value': undefined, 'done': true}, gen.next());
+}).call(goofy_context);
+
+// Check that "arguments" has the same value inside the generator as outside of it
+(function (){
+    assertEquals(28, arguments[0])
+    var gen = (for (x of i()) arguments[0]);
+    assertEquals({ 'value': 28, 'done': false}, gen.next());
+    assertEquals({ 'value': undefined, 'done': true}, gen.next());
+})(28);
