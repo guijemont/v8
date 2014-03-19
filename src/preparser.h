@@ -46,7 +46,8 @@ class ParserBase {
         allow_natives_syntax_(false),
         allow_generators_(false),
         allow_for_of_(false),
-        allow_generator_comprehensions_(false) { }
+        allow_generator_comprehensions_(false),
+        allow_array_comprehensions_ (false) { }
   // TODO(mstarzinger): Only virtual until message reporting has been unified.
   virtual ~ParserBase() { }
 
@@ -58,6 +59,9 @@ class ParserBase {
   bool allow_for_of() const { return allow_for_of_; }
   bool allow_generator_comprehensions() const {
     return allow_generator_comprehensions_;
+  }
+  bool allow_array_comprehensions() const {
+    return allow_array_comprehensions_;
   }
   bool allow_modules() const { return scanner()->HarmonyModules(); }
   bool allow_harmony_scoping() const { return scanner()->HarmonyScoping(); }
@@ -73,6 +77,9 @@ class ParserBase {
   void set_allow_for_of(bool allow) { allow_for_of_ = allow; }
   void set_allow_generator_comprehensions(bool allow) {
     allow_generator_comprehensions_ = allow;
+  }
+  void set_allow_array_comprehensions(bool allow) {
+    allow_array_comprehensions_ = allow;
   }
   void set_allow_modules(bool allow) { scanner()->SetHarmonyModules(allow); }
   void set_allow_harmony_scoping(bool allow) {
@@ -211,6 +218,7 @@ class ParserBase {
   bool allow_generators_;
   bool allow_for_of_;
   bool allow_generator_comprehensions_;
+  bool allow_array_comprehensions_;
 };
 
 

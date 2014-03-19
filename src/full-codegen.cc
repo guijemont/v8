@@ -229,6 +229,10 @@ void BreakableStatementChecker::VisitObjectLiteral(ObjectLiteral* expr) {
 void BreakableStatementChecker::VisitArrayLiteral(ArrayLiteral* expr) {
 }
 
+void BreakableStatementChecker::VisitArrayComprehension(
+    ArrayComprehension* expr) {
+}
+
 
 void BreakableStatementChecker::VisitAssignment(Assignment* expr) {
   // If assigning to a property (including a global property) the assignment is
@@ -1572,6 +1576,13 @@ void FullCodeGenerator::VisitLiteral(Literal* expr) {
   context()->Plug(expr->value());
 }
 
+void FullCodeGenerator::VisitArrayComprehension(ArrayComprehension* expr) {
+    //TODO(guijemont): could we have just a list of statements and use
+    //VisitStatements()?
+    Comment cmnt(masm_, "[ ArrayComprehension");
+    VisitBlock(expr->outer_for()->AsBlock());
+    context()->Plug(expr->accumulator());
+}
 
 void FullCodeGenerator::VisitFunctionLiteral(FunctionLiteral* expr) {
   Comment cmnt(masm_, "[ FunctionLiteral");

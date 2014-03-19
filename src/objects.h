@@ -1337,7 +1337,8 @@ class MaybeObject BASE_EMBEDDED {
   V(kWithStatement, "WithStatement")                                          \
   V(kWrongAddressOrValuePassedToRecordWrite,                                  \
     "Wrong address or value passed to RecordWrite")                           \
-  V(kYield, "Yield")
+  V(kYield, "Yield")                                                          \
+  V(kArrayComprehension, "Array Comprehension")
 
 
 #define ERROR_MESSAGES_CONSTANTS(C, T) C,

@@ -5186,6 +5186,13 @@ void HOptimizedGraphBuilder::VisitArrayLiteral(ArrayLiteral* expr) {
   return ast_context()->ReturnValue(Pop());
 }
 
+void HOptimizedGraphBuilder::VisitArrayComprehension(
+    ArrayComprehension* comprehension) {
+  ASSERT(!HasStackOverflow());
+  ASSERT(current_block() != NULL);
+  ASSERT(current_block()->HasPredecessor());
+  return Bailout(kArrayComprehension);
+}
 
 HCheckMaps* HOptimizedGraphBuilder::AddCheckMap(HValue* object,
                                                 Handle<Map> map) {

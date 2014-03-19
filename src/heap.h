@@ -216,6 +216,7 @@ namespace internal {
   V(dot_generator_object_string, ".generator_object")                    \
   V(eval_string, "eval")                                                 \
   V(empty_string, "")                                                    \
+  V(dot_accumulator_string, ".accumulator")                              \
   V(function_string, "function")                                         \
   V(length_string, "length")                                             \
   V(module_string, "module")                                             \

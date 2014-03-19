@@ -561,6 +561,7 @@ Parser::Parser(CompilationInfo* info)
   set_allow_generators(FLAG_harmony_generators);
   set_allow_for_of(FLAG_harmony_iteration);
   set_allow_generator_comprehensions(FLAG_harmony_generator_comprehensions);
+  set_allow_array_comprehensions(FLAG_harmony_array_comprehensions);
   set_allow_harmony_numeric_literals(FLAG_harmony_numeric_literals);
 }
 
@@ -3521,6 +3522,7 @@ void Parser::ReportInvalidPreparseData(Handle<String> name, bool* ok) {
 
 
 Statement* Parser::ParseComprehension(Variable *yield_variable,
+                                      Variable *accumulator,
                                       bool *ok) {
     Token::Value next = peek();
     int pos = peek_position();
@@ -3600,7 +3602,7 @@ Statement* Parser::ParseComprehension(Variable *yield_variable,
             VariableProxy* temp_proxy = factory()->NewVariableProxy(temp);
 
             Statement *body =
-                ParseComprehension(yield_variable, CHECK_OK);
+                ParseComprehension(yield_variable, accumulator, CHECK_OK);
             VariableProxy* each = top_scope_->NewUnresolved(factory(), name,
                     Interface::NewValue());
             ForEachStatement *loop =
@@ -3632,7 +3634,7 @@ Statement* Parser::ParseComprehension(Variable *yield_variable,
             Expression* condition = ParseAssignmentExpression(true, CHECK_OK);
             Expect(Token::RPAREN, CHECK_OK);
             Statement* then_statement =
-                ParseComprehension(yield_variable, CHECK_OK);
+                ParseComprehension(yield_variable, accumulator, CHECK_OK);
             Statement* else_statement =
                 factory()->NewEmptyStatement(RelocInfo::kNoPosition);
             result = factory()->NewIfStatement(condition, then_statement,
@@ -3642,11 +3644,31 @@ Statement* Parser::ParseComprehension(Variable *yield_variable,
         default:
             // AssignmentExpression
             Expression *inner_body = ParseAssignmentExpression(true, CHECK_OK);
-            Yield* yield = factory()->NewYield(
-                    factory()->NewVariableProxy(yield_variable),
-                    inner_body,
-                    Yield::SUSPEND, RelocInfo::kNoPosition);
-            result = factory()->NewExpressionStatement(yield, pos);
+            if (yield_variable != NULL) { // generator comprehension
+                Yield* yield = factory()->NewYield(
+                        factory()->NewVariableProxy(yield_variable),
+                        inner_body,
+                        Yield::SUSPEND, RelocInfo::kNoPosition);
+                result = factory()->NewExpressionStatement(yield, pos);
+            } else { // array comprehension
+                ASSERT(accumulator != NULL);
+                Factory* heap_factory = isolate()->factory();
+                Expression *push_literal = factory()->NewLiteral(
+                    heap_factory->InternalizeUtf8String("push"),
+                    RelocInfo::kNoPosition);
+                Property *push = factory()->NewProperty(
+                    factory()->NewVariableProxy(accumulator),
+                    push_literal,
+                    RelocInfo::kNoPosition);
+                ZoneList<Expression*>* push_arguments =
+                    new(zone()) ZoneList<Expression*>(1, zone());
+                push_arguments->Add(inner_body, zone());
+                Expression *call = factory()->NewCall(push, push_arguments,
+                        RelocInfo::kNoPosition);
+                result =
+                    factory()->NewExpressionStatement(call,
+                                                      RelocInfo::kNoPosition);
+            }
     }
     return result;
 }
@@ -3684,7 +3706,7 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
 
       pos = peek_position();
 
-      Statement *body = ParseComprehension(temp, CHECK_OK);
+      Statement *body = ParseComprehension(temp, NULL, CHECK_OK);
 
       // Generate nodes for the function
       function_body = new(zone()) ZoneList<Statement*>(3, zone());
@@ -3724,6 +3746,38 @@ Expression* Parser::ParseGeneratorComprehension(bool* ok) {
   return result;
 }
 
+Expression* Parser::ParseArrayComprehension(bool* ok) {
+  // Parses the _inside_ of an ArrayComprehension, (not the parentheses
+  // around it). Something like "for (x of z) y"
+  Statement *outer_for;
+  int pos = peek_position();
+
+  Factory* heap_factory = isolate()->factory();
+
+  Variable* accumulator = top_scope_->DeclarationScope()->NewTemporary(
+          heap_factory->dot_accumulator_string());
+  Expression* accumulator_proxy = factory()->NewVariableProxy(accumulator);
+  Expression* empty_list = factory()->NewArrayLiteral(
+          new(zone()) ZoneList<Expression*>(0, zone()),
+          current_function_state_->NextMaterializedLiteralIndex(),
+          RelocInfo::kNoPosition);
+  Expression* assignment = factory()->NewAssignment(Token::INIT_VAR,
+                                                    accumulator_proxy,
+                                                    empty_list,
+                                                    RelocInfo::kNoPosition);
+
+  outer_for = ParseComprehension(NULL, accumulator, CHECK_OK);
+
+  Block* content_statements =
+      factory()->NewBlock(NULL, 2, false, RelocInfo::kNoPosition);
+  content_statements->AddStatement(
+      factory()->NewExpressionStatement(assignment, RelocInfo::kNoPosition),
+      zone());
+  content_statements->AddStatement(outer_for, zone());
+
+
+  return factory()->NewArrayComprehension(accumulator, content_statements, pos);
+}
 
 Expression* Parser::ParsePrimaryExpression(bool* ok) {
   // PrimaryExpression ::
@@ -3807,7 +3861,13 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
       break;
 
     case Token::LBRACK:
-      result = ParseArrayLiteral(CHECK_OK);
+      Consume(Token::LBRACK);
+      if (allow_array_comprehensions() && peek() == Token::FOR) {
+          result = ParseArrayComprehension(CHECK_OK);
+      } else {
+          result = ParseArrayLiteral(CHECK_OK);
+      }
+      Expect(Token::RBRACK, CHECK_OK);
       break;
 
     case Token::LBRACE:
@@ -3851,10 +3911,11 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
 Expression* Parser::ParseArrayLiteral(bool* ok) {
   // ArrayLiteral ::
   //   '[' Expression? (',' Expression?)* ']'
+  // Parses only the inside of it (without the brackets, handled by
+  // ParsePrimaryExpression).
 
   int pos = peek_position();
   ZoneList<Expression*>* values = new(zone()) ZoneList<Expression*>(4, zone());
-  Expect(Token::LBRACK, CHECK_OK);
   while (peek() != Token::RBRACK) {
     Expression* elem;
     if (peek() == Token::COMMA) {
@@ -3867,7 +3928,6 @@ Expression* Parser::ParseArrayLiteral(bool* ok) {
       Expect(Token::COMMA, CHECK_OK);
     }
   }
-  Expect(Token::RBRACK, CHECK_OK);
 
   // Update the scope information before the pre-parsing bailout.
   int literal_index = current_function_state_->NextMaterializedLiteralIndex();

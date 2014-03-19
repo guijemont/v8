@@ -364,6 +364,14 @@ void PrettyPrinter::VisitArrayLiteral(ArrayLiteral* node) {
   Print(" ]");
 }
 
+void PrettyPrinter::VisitArrayComprehension(ArrayComprehension* node) {
+    Print("[ ");
+    // TODO(guijemont): check this looks like something, changes might be
+    // needed in some inner nodes
+    Visit(node->outer_for());
+    Print(" ]");
+}
+
 
 void PrettyPrinter::VisitVariableProxy(VariableProxy* node) {
   PrintLiteral(node->name(), false);
@@ -1049,6 +1057,13 @@ void AstPrinter::VisitArrayLiteral(ArrayLiteral* node) {
       Visit(node->values()->at(i));
     }
   }
+}
+
+void AstPrinter::VisitArrayComprehension(ArrayComprehension* node) {
+  // TODO(guijemont): check this looks good
+  IndentedScope indent(this, "ARRAY COMPREHENSION");
+  PrintLiteralIndented("ACCUMULATOR", node->accumulator()->name(), false);
+  PrintIndentedVisit("VALUES", node->outer_for());
 }
 
 

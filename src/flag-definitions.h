@@ -188,6 +188,8 @@ DEFINE_bool(harmony_generators, false, "enable harmony generators")
 DEFINE_bool(harmony_iteration, false, "enable harmony iteration (for-of)")
 DEFINE_bool(harmony_generator_comprehensions, false,
             "enable harmony generator comprehension")
+DEFINE_bool(harmony_array_comprehensions, false,
+            "enable harmony array comprehension")
 DEFINE_bool(harmony_numeric_literals, false,
             "enable harmony numeric literals (0o77, 0b11)")
 DEFINE_bool(harmony_strings, false, "enable harmony string")

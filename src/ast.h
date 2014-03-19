@@ -103,6 +103,7 @@ namespace internal {
   V(RegExpLiteral)                              \
   V(ObjectLiteral)                              \
   V(ArrayLiteral)                               \
+  V(ArrayComprehension)                         \
   V(Assignment)                                 \
   V(Yield)                                      \
   V(Throw)                                      \
@@ -1612,6 +1613,30 @@ class ArrayLiteral V8_FINAL : public MaterializedLiteral {
   Handle<FixedArray> constant_elements_;
   ZoneList<Expression*>* values_;
   const BailoutId first_element_id_;
+};
+
+
+class ArrayComprehension V8_FINAL : public Expression {
+ public:
+  DECLARE_NODE_TYPE(ArrayComprehension)
+
+  Variable* accumulator() const {
+    return accumulator_;
+  }
+  Statement* outer_for() const { return outer_for_; };
+
+ protected:
+  ArrayComprehension(Isolate* isolate,
+                     Variable* accumulator,
+                     Statement* outer_for,
+                     int pos)
+      : Expression(isolate, pos),
+        accumulator_(accumulator),
+        outer_for_(outer_for) {}
+
+ private:
+ Variable* accumulator_;
+ Statement* outer_for_;
 };
 
 
@@ -3144,6 +3169,16 @@ class AstNodeFactory V8_FINAL BASE_EMBEDDED {
         isolate_, values, literal_index, pos);
     VISIT_AND_RETURN(ArrayLiteral, lit)
   }
+
+  ArrayComprehension* NewArrayComprehension(
+      Variable* accumulator,
+      Statement* outer_for,
+      int pos) {
+    ArrayComprehension* comprehension = new(zone_) ArrayComprehension(
+        isolate_, accumulator, outer_for, pos);
+    VISIT_AND_RETURN(ArrayComprehension, comprehension)
+  }
+
 
   VariableProxy* NewVariableProxy(Variable* var,
                                   int pos = RelocInfo::kNoPosition) {

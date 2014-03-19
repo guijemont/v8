@@ -446,6 +446,9 @@ void AstTyper::VisitArrayLiteral(ArrayLiteral* expr) {
   NarrowType(expr, Bounds(Type::Array(isolate_)));
 }
 
+void AstTyper::VisitArrayComprehension(ArrayComprehension* expr) {
+    // TODO(guijemont): I sure need to put something here.
+}
 
 void AstTyper::VisitAssignment(Assignment* expr) {
   // Collect type feedback.
